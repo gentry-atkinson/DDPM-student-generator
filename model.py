@@ -16,10 +16,13 @@ import einops
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+import os
 
 from torchvision.transforms import Compose, ToTensor, Lambda
-from torchvision.datasets.mnist import MNIST, FashionMNIST
+#from torchvision.datasets.mnist import MNIST, FashionMNIST
+import torchvision.transforms as transforms
+from PIL import Image
 
 # Setting reproducibility
 SEED = 1885
@@ -30,13 +33,15 @@ torch.manual_seed(SEED)
 # Definitions
 STORE_PATH_MNIST = f"ddpm_model_mnist.pt"
 STORE_PATH_FASHION = f"ddpm_model_fashion.pt"
+STORE_PATH_STUDENT = f"ddpm_student_model.pt"
 
 batch_size = 128
 n_epochs = 20
 lr = 0.001
 no_train = False
 fashion = False
-store_path = "ddpm_fashion.pt" if fashion else "ddpm_mnist.pt"
+#store_path = "ddpm_fashion.pt" if fashion else "ddpm_mnist.pt"
+store_path = "ddpm_student_model.pt"
 
 if torch.cuda.is_available():
     device = "cuda:0"
@@ -69,6 +74,32 @@ def show_images(images, title=""):
     # Showing the figure
     plt.show()
 
+def save_images(images, title=""):
+    """Shows the provided images as sub-pictures in a square"""
+
+    # Converting images to CPU numpy arrays
+    if type(images) is torch.Tensor:
+        images = images.detach().cpu().numpy()
+
+    # Defining number of rows and columns
+    fig = plt.figure(figsize=(8, 8))
+    rows = int(len(images) ** (1 / 2))
+    cols = round(len(images) / rows)
+
+    # Populating figure with sub-plots
+    idx = 0
+    for r in range(rows):
+        for c in range(cols):
+            fig.add_subplot(rows, cols, idx + 1)
+
+            if idx < len(images):
+                plt.imshow(images[idx][0], cmap="gray")
+                idx += 1
+    fig.suptitle(title, fontsize=30)
+
+    # Showing the figure
+    plt.savefig("new_student_img.png")
+
 # Shows the first batch of images
 def show_first_batch(loader):
     for batch in loader:
@@ -79,8 +110,38 @@ transform = Compose([
     ToTensor(),
     Lambda(lambda x: (x - 0.5) * 2)]
 )
-ds_fn = FashionMNIST if fashion else MNIST
-dataset = ds_fn("./datasets", download=True, train=True, transform=transform)
+# ds_fn = FashionMNIST if fashion else MNIST
+# dataset = ds_fn("./datasets", download=True, train=True, transform=transform)
+# dataset = ds_fn("./sted_train_photos", download=True, train=True, transform=transform)
+
+
+class CustomDataset(Dataset):
+    def __init__(self, root_dir, transform=None):
+        self.root_dir = root_dir
+        self.transform = transform
+        self.images = os.listdir(root_dir)
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_name = os.path.join(self.root_dir, self.images[idx])
+        image = Image.open(img_name).convert("RGB")
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image
+
+# Define transformation pipeline
+transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
+])
+
+# Create custom dataset
+dataset = CustomDataset(root_dir='./DDPM student generator/sted_train_photos', transform=transform)
+
 loader = DataLoader(dataset, batch_size, shuffle=True)
 
 #show_first_batch(loader)
@@ -341,7 +402,7 @@ def training_loop(ddpm, loader, n_epochs, optim, device, display=False, store_pa
         epoch_loss = 0.0
         for step, batch in enumerate(tqdm(loader, leave=False, desc=f"Epoch {epoch + 1}/{n_epochs}", colour="#005500")):
             # Loading data
-            x0 = batch[0].to(device)
+            x0 = batch.to(device)
             n = len(x0)
 
             # Picking some noise for each of the images in the batch, a timestep and the respective alpha_bars
