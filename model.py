@@ -23,6 +23,8 @@ from torchvision.transforms import Compose, ToTensor, Lambda
 #from torchvision.datasets.mnist import MNIST, FashionMNIST
 import torchvision.transforms as transforms
 from PIL import Image
+import torch.nn.functional as F
+import datetime
 
 # Setting reproducibility
 SEED = 1885
@@ -35,7 +37,9 @@ STORE_PATH_MNIST = f"ddpm_model_mnist.pt"
 STORE_PATH_FASHION = f"ddpm_model_fashion.pt"
 STORE_PATH_STUDENT = f"ddpm_student_model.pt"
 
-batch_size = 128
+IMG_DIR = "student_images"
+
+batch_size = 64
 n_epochs = 20
 lr = 0.001
 no_train = False
@@ -47,6 +51,7 @@ if torch.cuda.is_available():
     device = "cuda:0"
 else:
     device = "cpu"
+
 
 def show_images(images, title=""):
     """Shows the provided images as sub-pictures in a square"""
@@ -88,22 +93,29 @@ def save_images(images, title=""):
 
     # Populating figure with sub-plots
     idx = 0
+    images = np.transpose(images, (0, 2, 3, 1))
+    #images = np.interp(images, (images.min(), images.max()), (0,1))
     for r in range(rows):
         for c in range(cols):
             fig.add_subplot(rows, cols, idx + 1)
 
             if idx < len(images):
-                plt.imshow(images[idx][0], cmap="gray")
+                plt.imshow(images[idx])
                 idx += 1
     fig.suptitle(title, fontsize=30)
 
     # Showing the figure
-    plt.savefig("new_student_img.png")
+    plt.savefig(f"{IMG_DIR}/{title}_{datetime.datetime.now()}.png")
 
 # Shows the first batch of images
 def show_first_batch(loader):
     for batch in loader:
-        show_images(batch[0], "Images in the first batch")
+        show_images(batch, "Images in the first batch")
+        break
+
+def save_first_batch(loader):
+    for batch in loader:
+        save_images(batch, "Images in the first batch")
         break
 # Loading the data (converting each image into a tensor and normalizing between [-1, 1])
 transform = Compose([
@@ -191,7 +203,7 @@ def show_forward(ddpm, loader, device):
         break
 
 
-def generate_new_images(ddpm, n_samples=16, device=None, frames_per_gif=100, gif_name="sampling.gif", c=1, h=28, w=28):
+def generate_new_images(ddpm, n_samples=16, device=None, frames_per_gif=100, gif_name="sampling.gif", c=3, h=256, w=256):
     """Given a DDPM model, a number of samples to be generated and a device, returns some newly generated samples"""
     frame_idxs = np.linspace(0, ddpm.n_steps, frames_per_gif).astype(np.uint)
     frames = []
@@ -219,12 +231,12 @@ def generate_new_images(ddpm, n_samples=16, device=None, frames_per_gif=100, gif
 
                 # Option 1: sigma_t squared = beta_t
                 beta_t = ddpm.betas[t]
-                sigma_t = beta_t.sqrt()
+                # sigma_t = beta_t.sqrt()
 
                 # Option 2: sigma_t squared = beta_tilda_t
-                # prev_alpha_t_bar = ddpm.alpha_bars[t-1] if t > 0 else ddpm.alphas[0]
-                # beta_tilda_t = ((1 - prev_alpha_t_bar)/(1 - alpha_t_bar)) * beta_t
-                # sigma_t = beta_tilda_t.sqrt()
+                prev_alpha_t_bar = ddpm.alpha_bars[t-1] if t > 0 else ddpm.alphas[0]
+                beta_tilda_t = ((1 - prev_alpha_t_bar)/(1 - alpha_t_bar)) * beta_t
+                sigma_t = beta_tilda_t.sqrt()
 
                 # Adding some more noise like in Langevin Dynamics fashion
                 x = x + sigma_t * z
@@ -245,16 +257,16 @@ def generate_new_images(ddpm, n_samples=16, device=None, frames_per_gif=100, gif
                 frames.append(frame)
 
     # Storing the gif
-    with imageio.get_writer(gif_name, mode="I") as writer:
-        for idx, frame in enumerate(frames):
-            rgb_frame = np.repeat(frame, 3, axis=2)
-            writer.append_data(rgb_frame)
+    # with imageio.get_writer(gif_name, mode="I") as writer:
+    #     for idx, frame in enumerate(frames):
+    #         rgb_frame = np.repeat(frame, 3, axis=2)
+    #         writer.append_data(rgb_frame)
 
-            # Showing the last frame for a longer time
-            if idx == len(frames) - 1:
-                last_rgb_frame = np.repeat(frames[-1], 3, axis=2)
-                for _ in range(frames_per_gif // 3):
-                    writer.append_data(last_rgb_frame)
+    #         # Showing the last frame for a longer time
+    #         if idx == len(frames) - 1:
+    #             last_rgb_frame = np.repeat(frames[-1], 3, axis=2)
+    #             for _ in range(frames_per_gif // 3):
+    #                 writer.append_data(last_rgb_frame)
     return x
 
 class MyBlock(nn.Module):
@@ -296,26 +308,31 @@ class MyUNet(nn.Module):
 
         # First half
         self.te1 = self._make_te(time_emb_dim, 1)
+        # self.b1 = nn.Sequential(
+        #     MyBlock((1, 28, 28), 1, 10),
+        #     MyBlock((10, 28, 28), 10, 10),
+        #     MyBlock((10, 28, 28), 10, 10)
+        # )
         self.b1 = nn.Sequential(
-            MyBlock((1, 28, 28), 1, 10),
-            MyBlock((10, 28, 28), 10, 10),
-            MyBlock((10, 28, 28), 10, 10)
+            MyBlock((3, 256, 256), 3, 10),
+            MyBlock((10, 256, 256), 10, 10),
+            MyBlock((10, 256, 256), 10, 10)
         )
         self.down1 = nn.Conv2d(10, 10, 4, 2, 1)
 
         self.te2 = self._make_te(time_emb_dim, 10)
         self.b2 = nn.Sequential(
-            MyBlock((10, 14, 14), 10, 20),
-            MyBlock((20, 14, 14), 20, 20),
-            MyBlock((20, 14, 14), 20, 20)
+            MyBlock((10, 128, 128), 10, 20),
+            MyBlock((20, 128, 128), 20, 20),
+            MyBlock((20, 128, 128), 20, 20)
         )
         self.down2 = nn.Conv2d(20, 20, 4, 2, 1)
 
         self.te3 = self._make_te(time_emb_dim, 20)
         self.b3 = nn.Sequential(
-            MyBlock((20, 7, 7), 20, 40),
-            MyBlock((40, 7, 7), 40, 40),
-            MyBlock((40, 7, 7), 40, 40)
+            MyBlock((20, 64, 64), 20, 40),
+            MyBlock((40, 64, 64), 40, 40),
+            MyBlock((40, 64, 64), 40, 40)
         )
         self.down3 = nn.Sequential(
             nn.Conv2d(40, 40, 2, 1),
@@ -326,9 +343,9 @@ class MyUNet(nn.Module):
         # Bottleneck
         self.te_mid = self._make_te(time_emb_dim, 40)
         self.b_mid = nn.Sequential(
-            MyBlock((40, 3, 3), 40, 20),
-            MyBlock((20, 3, 3), 20, 20),
-            MyBlock((20, 3, 3), 20, 40)
+            MyBlock((40, 31, 31), 40, 20),
+            MyBlock((20, 31, 31), 20, 20),
+            MyBlock((20, 31, 31), 20, 40)
         )
 
         # Second half
@@ -340,28 +357,28 @@ class MyUNet(nn.Module):
 
         self.te4 = self._make_te(time_emb_dim, 80)
         self.b4 = nn.Sequential(
-            MyBlock((80, 7, 7), 80, 40),
-            MyBlock((40, 7, 7), 40, 20),
-            MyBlock((20, 7, 7), 20, 20)
+            MyBlock((80, 64, 64), 80, 40),
+            MyBlock((40, 64, 64), 40, 20),
+            MyBlock((20, 64, 64), 20, 20)
         )
 
         self.up2 = nn.ConvTranspose2d(20, 20, 4, 2, 1)
         self.te5 = self._make_te(time_emb_dim, 40)
         self.b5 = nn.Sequential(
-            MyBlock((40, 14, 14), 40, 20),
-            MyBlock((20, 14, 14), 20, 10),
-            MyBlock((10, 14, 14), 10, 10)
+            MyBlock((40, 128, 128), 40, 20),
+            MyBlock((20, 128, 128), 20, 10),
+            MyBlock((10, 128, 128), 10, 10)
         )
 
         self.up3 = nn.ConvTranspose2d(10, 10, 4, 2, 1)
         self.te_out = self._make_te(time_emb_dim, 20)
         self.b_out = nn.Sequential(
-            MyBlock((20, 28, 28), 20, 10),
-            MyBlock((10, 28, 28), 10, 10),
-            MyBlock((10, 28, 28), 10, 10, normalize=False)
+            MyBlock((20, 256, 256), 20, 10),
+            MyBlock((10, 256, 256), 10, 10),
+            MyBlock((10, 256, 256), 10, 10, normalize=False)
         )
 
-        self.conv_out = nn.Conv2d(10, 1, 3, 1, 1)
+        self.conv_out = nn.Conv2d(10, 3, 3, 1, 1)
 
     def forward(self, x, t):
         # x is (N, 2, 28, 28) (image with positional embedding stacked on channel dimension)
@@ -371,9 +388,11 @@ class MyUNet(nn.Module):
         out2 = self.b2(self.down1(out1) + self.te2(t).reshape(n, -1, 1, 1))  # (N, 20, 14, 14)
         out3 = self.b3(self.down2(out2) + self.te3(t).reshape(n, -1, 1, 1))  # (N, 40, 7, 7)
 
-        out_mid = self.b_mid(self.down3(out3) + self.te_mid(t).reshape(n, -1, 1, 1))  # (N, 40, 3, 3)
-
-        out4 = torch.cat((out3, self.up1(out_mid)), dim=1)  # (N, 80, 7, 7)
+        sploot = self.down3(out3) + self.te_mid(t).reshape(n, -1, 1, 1)
+        out_mid = self.b_mid(sploot)  # (N, 40, 3, 3)
+        sploot1 = self.up1(out_mid)
+        sploot1 = F.interpolate(sploot1, size=(64,64), mode='nearest')
+        out4 = torch.cat((out3, sploot1), dim=1)  # (N, 80, 7, 7)
         out4 = self.b4(out4 + self.te4(t).reshape(n, -1, 1, 1))  # (N, 20, 7, 7)
 
         out5 = torch.cat((out2, self.up2(out4)), dim=1)  # (N, 40, 14, 14)
@@ -395,6 +414,7 @@ class MyUNet(nn.Module):
     
 def training_loop(ddpm, loader, n_epochs, optim, device, display=False, store_path="ddpm_model.pt"):
     mse = nn.MSELoss()
+    mae = nn.L1Loss()
     best_loss = float("inf")
     n_steps = ddpm.n_steps
 
@@ -416,7 +436,8 @@ def training_loop(ddpm, loader, n_epochs, optim, device, display=False, store_pa
             eta_theta = ddpm.backward(noisy_imgs, t.reshape(n, -1))
 
             # Optimizing the MSE between the noise plugged and the predicted noise
-            loss = mse(eta_theta, eta)
+            # loss = mse(eta_theta, eta)
+            loss = mae(eta_theta, eta)
             optim.zero_grad()
             loss.backward()
             optim.step()
