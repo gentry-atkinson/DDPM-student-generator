@@ -2,38 +2,50 @@
 # Organization: St. Edwards University
 # Date: 3 Jan, 2024
 
-from model import MyDDPM, MyUNet, device, training_loop, loader, generate_new_images, save_images, save_first_batch
-from torch.optim import Adam
 import torch
+import os
+from torchvision import transforms
+from diffusers import StableDiffusionImageVariationPipeline
+from diffusers import StableDiffusionXLImg2ImgPipeline
+from PIL import Image
 
-batch_size = 128
-n_epochs = 100
-lr = 0.001
-no_train = False
+if torch.cuda.is_available():
+        device = "cuda"
+else:
+    device = "cpu"
 
-# Defining model
-n_steps, min_beta, max_beta = 1000, 10 ** -4, 0.02  # Originally used by the authors
-ddpm = MyDDPM(MyUNet(n_steps), n_steps=n_steps, min_beta=min_beta, 
-              max_beta=max_beta, device=device)
-print(sum([p.numel() for p in ddpm.parameters()]))
+if __name__ == '__main__':
+    #Setup
+    if not os.path.exists(os.path.join("DDPM student generator", "output_images")):
+        os.mkdir(os.path.join("DDPM student generator", "output_images"))
 
-# store_path = "ddpm_fashion.pt" if fashion else "ddpm_mnist.pt"
-store_path = "ddpm_student_model.pt"
-save_first_batch(loader)
-if not no_train:
-    training_loop(ddpm, loader, n_epochs, optim=Adam(ddpm.parameters(), lr), device=device, store_path=store_path)
-
-best_model = MyDDPM(MyUNet(), n_steps=n_steps, device=device)
-best_model.load_state_dict(torch.load(store_path, map_location=device))
-best_model.eval()
-print("Model loaded")
-
-print("Generating new images")
-generated = generate_new_images(
-        best_model,
-        n_samples=9,
-        device=device,
-        #gif_name="fashion.gif" if fashion else "mnist.gif"
-        gif_name="student.gif"
+    sd_pipe = StableDiffusionImageVariationPipeline.from_pretrained(
+        "lambdalabs/sd-image-variations-diffusers",
+        revision="v2.0",
     )
-save_images(generated, f"DDPM_Final result_{n_epochs}_epochs")
+    sd_pipe = sd_pipe.to(device)
+
+    ref_pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-refiner-1.0", 
+        torch_dtype=torch.float16, variant="fp16", 
+        use_safetensors=True
+    )
+    ref_pipe = ref_pipe.to(device)
+    prompt = "A university student enjoying life at St. Edwards University."
+
+    im = Image.open(os.path.join("sted_train_photos", "train", "student", "sted_train_001.png"))
+    tform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize(
+            (224, 224),
+            interpolation=transforms.InterpolationMode.BICUBIC,
+            antialias=False,
+            ),
+    ])
+    inp = tform(im).to(device)
+
+    out = sd_pipe(im, guidance_scale=3)
+    out = out.images[0]
+    out = out.resize((500, 500))
+    image = ref_pipe(prompt, image=out).images[0]
+    image.save("result.png")
