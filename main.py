@@ -32,20 +32,28 @@ if __name__ == '__main__':
     )
     ref_pipe = ref_pipe.to(device)
     prompt = "A university student enjoying life at St. Edwards University."
-
-    im = Image.open(os.path.join("sted_train_photos", "train", "student", "sted_train_001.png"))
     tform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(
             (224, 224),
             interpolation=transforms.InterpolationMode.BICUBIC,
             antialias=False,
-            ),
+        )
     ])
-    inp = tform(im).to(device)
 
-    out = sd_pipe(im, guidance_scale=3)
-    out = out.images[0]
-    out = out.resize((500, 500))
-    image = ref_pipe(prompt, image=out).images[0]
-    image.save("result.png")
+    # Loop through collected images and create alternates
+    for i, file in enumerate(os.listdir(os.path.join("sted_train_photos", "train", "student"))):
+        im = Image.open(os.path.join("sted_train_photos", "train", "student", file))
+        inp = tform(im).to(device)
+
+        out = sd_pipe(im, guidance_scale=3)
+        out = out.images[0]
+        out = out.resize((500, 500))
+        image = ref_pipe(prompt, image=out).images[0]
+        image.save(os.path.join("DDPM student generator", "output_images", f"alternate_for_img_{i}a.png"))
+
+        out = sd_pipe(im, guidance_scale=3)
+        out = out.images[0]
+        out = out.resize((500, 500))
+        image = ref_pipe(prompt, image=out).images[0]
+        image.save(os.path.join("DDPM student generator", "output_images", f"alternate_for_img_{i}b.png"))
